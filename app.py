@@ -3,133 +3,114 @@ import pandas as pd
 import yfinance as yf
 from datetime import date
 import time
-import random
 
 # --- Page Config ---
-st.set_page_config(page_title="Market Analyst Pro", layout="wide", page_icon="📊")
+st.set_page_config(page_title="US Market Screen", layout="wide")
 
-# --- 1. Load Tickers (Cached) ---
+# --- 1. Robust Ticker Loading (All Exchanges) ---
 @st.cache_data(ttl=86400)
-def load_tickers():
+def load_all_us_tickers():
     try:
+        # These two files together cover basically everything traded in the US
         nasdaq = pd.read_csv("https://www.nasdaqtrader.com/dynamic/symdir/nasdaqlisted.txt", sep='|')
         other = pd.read_csv("https://www.nasdaqtrader.com/dynamic/symdir/otherlisted.txt", sep='|')
+        
         nasdaq = nasdaq[['Symbol', 'Security Name']].copy()
+        nasdaq['Exchange'] = 'NASDAQ'
+        
         other = other[['ACT Symbol', 'Security Name']].rename(columns={'ACT Symbol': 'Symbol'}).copy()
+        other['Exchange'] = 'OTHER (NYSE/AMEX)'
+        
         df = pd.concat([nasdaq, other], ignore_index=True).drop_duplicates(subset='Symbol')
-        # Clean out non-standard tickers
+        # Filter out warrants, test symbols, and rights
         df = df[~df['Symbol'].str.contains(r'\$|\.|TEST', na=False)]
+        
+        # Add a placeholder for Sector/Industry (see note below)
+        df['Type'] = df['Security Name'].apply(lambda x: 'ETF' if ' ETF' in str(x) or 'Trust' in str(x) else 'Stock')
         return df
     except:
         return pd.DataFrame()
 
-tickers_df = load_tickers()
-all_tickers = tickers_df["Symbol"].tolist()
+tickers_df = load_all_us_tickers()
 
-# --- 2. Sidebar Controls ---
+# --- 2. Sidebar Filters ---
 with st.sidebar:
-    st.header("⚙️ Settings")
-    start_date = st.date_input("Start Date", value=date(2025, 1, 1))
+    st.header("⚙️ Filter Criteria")
+    start_date = st.date_input("Start Date", value=date(2025, 2, 18))
     end_date = st.date_input("End Date", value=date.today())
     
     st.divider()
-    st.subheader("Filters")
-    min_price = st.slider("Min Price ($)", 0.0, 20.0, 1.0)
-    max_gain = st.number_input("Max Gain % (Cap)", value=1000, help="Filters out massive split-related errors.")
+    asset_type = st.multiselect("Asset Type", ["Stock", "ETF"], default=["Stock", "ETF"])
+    min_price = st.number_input("Min Price at Start ($)", value=1.0)
     
-    st.divider()
-    batch_size = st.select_slider("Speed/Accuracy Balance", options=[50, 100, 200, 500], value=100)
-    st.caption("Lower batch size = Higher accuracy for splits.")
+    st.info("💡 Tip: To filter by Industry, use a specific screener tool. Fetching industry data for 10k+ stocks in real-time is too slow for a free app.")
 
-# --- 3. Main UI ---
-st.title("📈 Market Top Gainers & Losers")
-st.info(f"Ready to scan **{len(all_tickers):,}** US Symbols. Data is split-adjusted.")
+# Filter list before running
+filtered_df = tickers_df[tickers_df['Type'].isin(asset_type)]
+tickers_to_scan = filtered_df["Symbol"].tolist()
+
+# --- 3. Main Analysis ---
+st.title("📈 All US Market Performance")
+st.caption(f"Loaded **{len(tickers_df):,}** symbols across NASDAQ, NYSE, and AMEX.")
 
 if st.button("🚀 Run Analysis", use_container_width=True):
-    if start_date >= end_date:
-        st.error("End date must be after start date.")
-    else:
-        results = []
-        progress_bar = st.progress(0)
-        status = st.empty()
+    results = []
+    progress_bar = st.progress(0)
+    batch_size = 150 # Safe batch size
+    
+    for i in range(0, len(tickers_to_scan), batch_size):
+        batch = tickers_to_scan[i:i + batch_size]
+        try:
+            # Fetch data with auto_adjust to fix the split issue (LICN/SNDK)
+            data = yf.download(batch, start=start_date, end=end_date, auto_adjust=True, progress=False)
+            
+            if not data.empty and "Close" in data:
+                closes = data["Close"]
+                if isinstance(closes, pd.Series): closes = closes.to_frame()
+
+                for ticker in closes.columns:
+                    series = closes[ticker].dropna()
+                    if len(series) >= 2:
+                        # Ensure the stock existed at the start of your range (XDEF fix)
+                        if (series.index[0].date() - start_date).days <= 7:
+                            s_p = series.iloc[0]
+                            e_p = series.iloc[-1]
+                            
+                            if s_p >= min_price:
+                                pct = ((e_p / s_p) - 1) * 100
+                                if -99.9 < pct < 5000:
+                                    results.append({
+                                        "Symbol": ticker,
+                                        "% Change": pct,
+                                        "Start Price": s_p,
+                                        "End Price": e_p
+                                    })
+        except:
+            pass
         
-        for i in range(0, len(all_tickers), batch_size):
-            batch = all_tickers[i:i + batch_size]
-            status.text(f"Crunching batch {i//batch_size + 1}...")
-            
-            try:
-                # auto_adjust=True fixes LICN 4500% gains by back-adjusting old prices
-                data = yf.download(
-                    tickers=batch,
-                    start=start_date,
-                    end=end_date,
-                    auto_adjust=True, 
-                    progress=False,
-                    threads=True
-                )
-                
-                if not data.empty and "Close" in data:
-                    closes = data["Close"]
-                    
-                    # If only one ticker is returned, it's a Series; otherwise a DataFrame
-                    if isinstance(closes, pd.Series):
-                        # Handle single-ticker results if they happen
-                        closes = closes.to_frame()
+        progress_bar.progress(min(1.0, (i + batch_size) / len(tickers_to_scan)))
+        time.sleep(0.1)
 
-                    for ticker in closes.columns:
-                        series = closes[ticker].dropna()
-                        if len(series) >= 2:
-                            start_p = series.iloc[0]
-                            end_p = series.iloc[-1]
-                            
-                            # Standard % Change Math
-                            pct = ((end_p / start_p) - 1) * 100
-                            
-                            # Filter out penny stocks and extreme outliers (likely data errors)
-                            if start_p >= min_price and pct <= max_gain:
-                                results.append({
-                                    "Symbol": ticker,
-                                    "% Change": pct,
-                                    "Start Price": round(start_p, 2),
-                                    "End Price": round(end_p, 2)
-                                })
-            except:
-                continue
+    if results:
+        # CLEANING FOR DISPLAY (Fixes RuntimeError)
+        final_df = pd.DataFrame(results)
+        final_df = final_df.merge(tickers_df[['Symbol', 'Security Name', 'Type', 'Exchange']], on='Symbol', how='left')
+        
+        # Round and Format
+        final_df["% Change"] = final_df["% Change"].round(2)
+        final_df["Start Price"] = final_df["Start Price"].round(2)
+        final_df["End Price"] = final_df["End Price"].round(2)
+        
+        # DISPLAY
+        st.success("✅ Done!")
+        c1, c2 = st.columns(2)
+        with c1:
+            st.subheader("🚀 Top 15 Gainers")
+            st.dataframe(final_df.sort_values("% Change", ascending=False).head(15), hide_index=True)
+        with c2:
+            st.subheader("📉 Top 15 Losers")
+            st.dataframe(final_df.sort_values("% Change", ascending=True).head(15), hide_index=True)
             
-            progress_bar.progress(min(1.0, (i + batch_size) / len(all_tickers)))
-            time.sleep(0.1)
-
-        if results:
-            final_df = pd.DataFrame(results)
-            final_df = final_df.merge(tickers_df, on="Symbol", how="left")
-            final_df = final_df.rename(columns={"Security Name": "Company Name"})
-            final_df = final_df.sort_values("% Change", ascending=False).reset_index(drop=True)
-
-            status.success(f"Verified {len(final_df)} symbols!")
-            st.balloons()
-
-            # --- Layout ---
-            c1, c2 = st.columns(2)
-            
-            col_config = {
-                "% Change": st.column_config.NumberColumn(format="%.2f%%"),
-                "Start Price": st.column_config.NumberColumn(format="$%.2f"),
-                "End Price": st.column_config.NumberColumn(format="$%.2f")
-            }
-
-            with c1:
-                st.subheader("🔥 Top 15 Gainers")
-                st.dataframe(final_df.head(15), use_container_width=True, hide_index=True, column_config=col_config)
-            
-            with c2:
-                st.subheader("🧊 Top 15 Losers")
-                st.dataframe(final_df.tail(15).sort_values("% Change"), use_container_width=True, hide_index=True, column_config=col_config)
-            
-            st.divider()
-            st.subheader("📊 All Data")
-            st.dataframe(final_df, use_container_width=True, column_config=col_config)
-            
-            csv = final_df.to_csv(index=False).encode('utf-8')
-            st.download_button("📥 Download Full Report", data=csv, file_name="market_report.csv")
-        else:
-            st.warning("No data found. Try reducing the 'Min Price' or expanding the date range.")
+        st.subheader("📊 Full Results")
+        # Final safety check for the dataframe display
+        st.dataframe(final_df.reset_index(drop=True), use_container_width=True)
