@@ -1,28 +1,14 @@
 import streamlit as st
 import pandas as pd
 import yfinance as yf
-from datetime import date, datetime
+from datetime import date
 import time
 import random
 
 # --- Page Config ---
-st.set_page_config(page_title="Market Analyst", layout="wide")
+st.set_page_config(page_title="Market Analyst Pro", layout="wide", page_icon="📊")
 
-# --- 1. Sidebar Configuration & Safety Settings ---
-with st.sidebar:
-    st.header("⚙️ Controls")
-    start_date = st.date_input("Start Date", value=date(2025, 1, 1))
-    end_date = st.date_input("End Date", value=date.today())
-    
-    st.divider()
-    st.subheader("🛡️ Safety Settings")
-    batch_size = st.slider("Batch Size", 50, 300, 150, help="Smaller batches are safer but slower.")
-    pause_time = st.slider("Request Delay (sec)", 0.1, 2.0, 0.3, help="Prevents Yahoo from blocking your IP.")
-    
-    st.divider()
-    min_price = st.number_input("Min Stock Price ($)", value=1.0, help="Filters out penny stocks with glitchy data.")
-
-# --- 2. Ticker Loading with "Last Updated" Logic ---
+# --- 1. Load Tickers (Cached) ---
 @st.cache_data(ttl=86400)
 def load_tickers():
     try:
@@ -31,109 +17,119 @@ def load_tickers():
         nasdaq = nasdaq[['Symbol', 'Security Name']].copy()
         other = other[['ACT Symbol', 'Security Name']].rename(columns={'ACT Symbol': 'Symbol'}).copy()
         df = pd.concat([nasdaq, other], ignore_index=True).drop_duplicates(subset='Symbol')
+        # Clean out non-standard tickers
         df = df[~df['Symbol'].str.contains(r'\$|\.|TEST', na=False)]
-        
-        # Add a timestamp to show when data was pulled
-        last_pulled = datetime.now().strftime("%Y-%m-%d %H:%M")
-        return df, last_pulled
+        return df
     except:
-        return pd.DataFrame(), "Failed to load"
+        return pd.DataFrame()
 
-tickers_df, last_refreshed = load_tickers()
+tickers_df = load_tickers()
 all_tickers = tickers_df["Symbol"].tolist()
 
-# --- Main App UI ---
-st.title("📈 Market Top Gainers & Losers")
-st.caption(f"Ticker list last synced: **{last_refreshed}**")
+# --- 2. Sidebar Controls ---
+with st.sidebar:
+    st.header("⚙️ Settings")
+    start_date = st.date_input("Start Date", value=date(2025, 1, 1))
+    end_date = st.date_input("End Date", value=date.today())
+    
+    st.divider()
+    st.subheader("Filters")
+    min_price = st.slider("Min Price ($)", 0.0, 20.0, 1.0)
+    max_gain = st.number_input("Max Gain % (Cap)", value=1000, help="Filters out massive split-related errors.")
+    
+    st.divider()
+    batch_size = st.select_slider("Speed/Accuracy Balance", options=[50, 100, 200, 500], value=100)
+    st.caption("Lower batch size = Higher accuracy for splits.")
 
-if st.button("🚀 Run Full Analysis", use_container_width=True):
+# --- 3. Main UI ---
+st.title("📈 Market Top Gainers & Losers")
+st.info(f"Ready to scan **{len(all_tickers):,}** US Symbols. Data is split-adjusted.")
+
+if st.button("🚀 Run Analysis", use_container_width=True):
     if start_date >= end_date:
-        st.error("End date must be after start date")
+        st.error("End date must be after start date.")
     else:
         results = []
         progress_bar = st.progress(0)
-        status_msg = st.empty()
+        status = st.empty()
         
-        # --- 3. Implementation of Smart Batching ---
-        total_tickers = len(all_tickers)
-        
-        for i in range(0, total_tickers, batch_size):
+        for i in range(0, len(all_tickers), batch_size):
             batch = all_tickers[i:i + batch_size]
-            current_batch_num = (i // batch_size) + 1
-            total_batches = (total_tickers // batch_size) + 1
-            
-            status_msg.info(f"Processing Batch {current_batch_num}/{total_batches}...")
+            status.text(f"Crunching batch {i//batch_size + 1}...")
             
             try:
-                # We pull 'Close' and 'Adj Close' to ensure we account for dividends/splits
+                # auto_adjust=True fixes LICN 4500% gains by back-adjusting old prices
                 data = yf.download(
                     tickers=batch,
                     start=start_date,
                     end=end_date,
+                    auto_adjust=True, 
                     progress=False,
-                    threads=True,
-                    group_by='column'
+                    threads=True
                 )
                 
                 if not data.empty and "Close" in data:
-                    closes = data["Close"].dropna(axis=1, how='all')
+                    closes = data["Close"]
                     
-                    if len(closes) >= 2:
-                        first_p = closes.iloc[0]
-                        last_p = closes.iloc[-1]
-                        
-                        # Calculation Logic
-                        pct = ((last_p / first_p) - 1) * 100
-                        
-                        # Filtering for Price & Validity
-                        temp = pd.DataFrame({
-                            "Symbol": pct.index, 
-                            "% Change": pct.values,
-                            "Last Price": last_p.values
-                        }).dropna()
-                        
-                        # Apply the "Min Price" safety filter
-                        temp = temp[temp["Last Price"] >= min_price]
-                        results.append(temp)
-            
-            except Exception as e:
-                # If a batch fails, we wait a bit longer then keep going
-                time.sleep(2)
+                    # If only one ticker is returned, it's a Series; otherwise a DataFrame
+                    if isinstance(closes, pd.Series):
+                        # Handle single-ticker results if they happen
+                        closes = closes.to_frame()
+
+                    for ticker in closes.columns:
+                        series = closes[ticker].dropna()
+                        if len(series) >= 2:
+                            start_p = series.iloc[0]
+                            end_p = series.iloc[-1]
+                            
+                            # Standard % Change Math
+                            pct = ((end_p / start_p) - 1) * 100
+                            
+                            # Filter out penny stocks and extreme outliers (likely data errors)
+                            if start_p >= min_price and pct <= max_gain:
+                                results.append({
+                                    "Symbol": ticker,
+                                    "% Change": pct,
+                                    "Start Price": round(start_p, 2),
+                                    "End Price": round(end_p, 2)
+                                })
+            except:
                 continue
-                
-            # Update Progress UI
-            progress_perc = min(1.0, (i + batch_size) / total_tickers)
-            progress_bar.progress(progress_perc)
             
-            # The "Safety Pause" - varies slightly to look more like natural traffic
-            time.sleep(pause_time + random.uniform(0, 0.2))
+            progress_bar.progress(min(1.0, (i + batch_size) / len(all_tickers)))
+            time.sleep(0.1)
 
         if results:
-            final_df = pd.concat(results, ignore_index=True)
+            final_df = pd.DataFrame(results)
             final_df = final_df.merge(tickers_df, on="Symbol", how="left")
-            final_df = final_df.rename(columns={"Security Name": "Name"})
-            
-            # Clean up the final list
-            final_df = final_df[final_df['% Change'].between(-99.9, 5000)]
-            final_df = final_df.sort_values("% Change", ascending=False).round(2).reset_index(drop=True)
-            
-            status_msg.success(f"Successfully analyzed {len(final_df)} stocks!")
+            final_df = final_df.rename(columns={"Security Name": "Company Name"})
+            final_df = final_df.sort_values("% Change", ascending=False).reset_index(drop=True)
+
+            status.success(f"Verified {len(final_df)} symbols!")
             st.balloons()
 
-            # --- Display Results ---
-            col_a, col_b = st.columns(2)
-            with col_a:
-                st.subheader("🚀 Top 15 Gainers")
-                st.dataframe(final_df.head(15), use_container_width=True, hide_index=True)
-            with col_b:
-                st.subheader("📉 Top 15 Losers")
-                st.dataframe(final_df.tail(15).sort_values("% Change"), use_container_width=True, hide_index=True)
-                
-            # Full Data Export
-            st.divider()
-            st.download_button("📥 Download Results (CSV)", final_df.to_csv(index=False), "market_data.csv")
-        else:
-            status_msg.error("No data recovered. Yahoo may be rate-limiting you.")
+            # --- Layout ---
+            c1, c2 = st.columns(2)
+            
+            col_config = {
+                "% Change": st.column_config.NumberColumn(format="%.2f%%"),
+                "Start Price": st.column_config.NumberColumn(format="$%.2f"),
+                "End Price": st.column_config.NumberColumn(format="$%.2f")
+            }
 
-else:
-    st.info("Adjust settings in the sidebar and click 'Run Full Analysis' to start.")
+            with c1:
+                st.subheader("🔥 Top 15 Gainers")
+                st.dataframe(final_df.head(15), use_container_width=True, hide_index=True, column_config=col_config)
+            
+            with c2:
+                st.subheader("🧊 Top 15 Losers")
+                st.dataframe(final_df.tail(15).sort_values("% Change"), use_container_width=True, hide_index=True, column_config=col_config)
+            
+            st.divider()
+            st.subheader("📊 All Data")
+            st.dataframe(final_df, use_container_width=True, column_config=col_config)
+            
+            csv = final_df.to_csv(index=False).encode('utf-8')
+            st.download_button("📥 Download Full Report", data=csv, file_name="market_report.csv")
+        else:
+            st.warning("No data found. Try reducing the 'Min Price' or expanding the date range.")
