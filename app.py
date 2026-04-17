@@ -77,24 +77,36 @@ if not tickers_df.empty:
                     if isinstance(closes, pd.Series): closes = closes.to_frame()
 
                     for ticker in closes.columns:
-                        series = closes[ticker].dropna()
-                        if len(series) >= 2:
-                            # Verify Inception (Fixes XDEF errors)
-                            actual_start = series.index[0].date()
-                            if (actual_start - start_date).days <= 7:
-                                s_p = float(series.iloc[0])
-                                e_p = float(series.iloc[-1])
-                                
-                                if s_p >= min_price:
-                                    pct = ((e_p / s_p) - 1) * 100
-                                    # Filter outliers/data errors
-                                    if -99.9 < pct < 3000:
-                                        results.append({
-                                            "Symbol": str(ticker),
-                                            "Pct_Change": round(pct, 2),
-                                            "Price_Start": round(s_p, 2),
-                                            "Price_End": round(e_p, 2)
-                                        })
+    # Get price and volume for this specific ticker
+    price_series = closes[ticker].dropna()
+    
+    if len(price_series) >= 5: # Require at least 5 days of data for stability
+        actual_start_date = price_series.index[0].date()
+        
+        # 1. THE INCEPTION GUARD: Must exist within 3 days of your start date
+        if abs((actual_start_date - start_date).days) <= 3:
+            s_p = float(price_series.iloc[0])
+            e_p = float(price_series.iloc[-1])
+            
+            if s_p >= min_price:
+                pct = ((e_p / s_p) - 1) * 100
+                
+                # 2. THE GLITCH GUARD: 
+                # If a stock 'drops' 99% but the start price was huge ($2800), 
+                # or if a stock 'gains' 5000%, it's almost certainly a split/data error.
+                if -95.0 < pct < 1000.0:
+                    
+                    # 3. THE WARRANT/TEST GUARD:
+                    sec_name = str(tickers_df[tickers_df['Symbol'] == ticker]['Security Name'].values[0]).upper()
+                    if any(bad in sec_name for bad in ['WARRANT', 'RIGHTS', 'TEST', 'UNIT']):
+                        continue
+                        
+                    results.append({
+                        "Symbol": str(ticker),
+                        "Pct_Change": round(pct, 2),
+                        "Price_Start": round(s_p, 2),
+                        "Price_End": round(e_p, 2)
+                    })
             except:
                 continue # Skip failing batches
             
