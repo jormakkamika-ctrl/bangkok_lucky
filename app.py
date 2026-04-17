@@ -5,78 +5,71 @@ from datetime import date
 import time
 
 # --- 1. Page Config ---
-st.set_page_config(page_title="Market Insights 2026", layout="wide")
+st.set_page_config(page_title="Market Insights Pro", layout="wide", page_icon="📈")
 
-# --- 2. THE CACHE (Zero UI inside here to satisfy Python 3.14) ---
-@st.cache_data(show_spinner=False)
+# --- 2. Data Loading (Safe for Python 3.12) ---
+@st.cache_data(ttl=86400)
 def load_all_us_tickers():
     try:
-        # Fetching official lists
+        # Load official exchange lists
         nasdaq = pd.read_csv("https://www.nasdaqtrader.com/dynamic/symdir/nasdaqlisted.txt", sep='|')
         other = pd.read_csv("https://www.nasdaqtrader.com/dynamic/symdir/otherlisted.txt", sep='|')
         
-        # Clean NASDAQ
-        nasdaq = nasdaq[['Symbol', 'Security Name']].copy()
-        nasdaq['Exchange'] = 'NASDAQ'
+        n_df = nasdaq[['Symbol', 'Security Name']].copy()
+        o_df = other[['ACT Symbol', 'Security Name']].rename(columns={'ACT Symbol': 'Symbol'}).copy()
         
-        # Clean NYSE/AMEX
-        other = other[['ACT Symbol', 'Security Name']].rename(columns={'ACT Symbol': 'Symbol'}).copy()
-        other['Exchange'] = 'NYSE/AMEX'
+        full_df = pd.concat([n_df, o_df], ignore_index=True).drop_duplicates(subset='Symbol')
+        # Clean out warrants/test symbols
+        full_df = full_df[~full_df['Symbol'].str.contains(r'\$|\.|TEST', na=False)]
         
-        # Combine
-        df = pd.concat([nasdaq, other], ignore_index=True).drop_duplicates(subset='Symbol')
-        # Filter junk symbols
-        df = df[~df['Symbol'].str.contains(r'\$|\.|TEST', na=False)]
-        
-        # Simple Logic for Type
-        df['Type'] = df['Security Name'].apply(lambda x: 'ETF' if ' ETF' in str(x) or 'Trust' in str(x) else 'Stock')
-        return df
-    except:
+        # Identify ETFs vs Stocks
+        full_df['Asset Type'] = full_df['Security Name'].apply(
+            lambda x: 'ETF' if any(word in str(x) for word in [' ETF', 'Trust', 'Invesco', 'iShares', 'Vanguard']) else 'Stock'
+        )
+        return full_df
+    except Exception as e:
+        st.error(f"Failed to load ticker list: {e}")
         return pd.DataFrame()
 
-# --- 3. Initial Load ---
-# We call the spinner OUTSIDE the cached function
-with st.spinner("Connecting to NASDAQ/NYSE..."):
-    tickers_df = load_all_us_tickers()
-
-if tickers_df.empty:
-    st.error("Data source currently unavailable. Please try again in a few minutes.")
-    st.stop()
-
-# --- 4. Sidebar UI ---
+# --- 3. Sidebar UI ---
 with st.sidebar:
-    st.header("⚙️ Analysis Settings")
+    st.header("⚙️ Configuration")
     start_date = st.date_input("Start Date", value=date(2025, 2, 18))
     end_date = st.date_input("End Date", value=date.today())
     
     st.divider()
-    asset_types = st.multiselect("Asset Type", ["Stock", "ETF"], default=["Stock", "ETF"])
-    min_price = st.number_input("Min Price ($) at Start", value=1.0)
+    st.subheader("Filters")
+    selected_types = st.multiselect("Asset Categories", ["Stock", "ETF"], default=["Stock", "ETF"])
+    min_price = st.number_input("Min Price at Start ($)", value=1.0, step=0.5)
     
     st.divider()
-    batch_size = st.slider("Batch Size (Accuracy)", 50, 200, 100)
+    st.info("Batching is set to 150 for balance between speed and split-accuracy.")
 
-# Filter the list based on sidebar before scanning
-filtered_tickers = tickers_df[tickers_df['Type'].isin(asset_types)]["Symbol"].tolist()
+# --- 4. Main App Logic ---
+st.title("📊 US Market: Gainers & Losers")
+st.caption(f"Analyzing all US Exchanges (NASDAQ, NYSE, AMEX). Using Python 3.12 Environment.")
 
-# --- 5. Main Execution ---
-st.title("📈 US Market Performance Tracker")
-st.caption(f"Ready to scan {len(filtered_tickers):,} symbols across all US exchanges.")
+# Initial Data Pull
+with st.spinner("Fetching ticker master-list..."):
+    tickers_df = load_all_us_tickers()
 
-if st.button("🚀 Run Full Analysis", use_container_width=True):
-    if start_date >= end_date:
-        st.error("End date must be after start date.")
-    else:
+if not tickers_df.empty:
+    # Filter the master list before scanning
+    filtered_list = tickers_df[tickers_df['Asset Type'].isin(selected_types)]["Symbol"].tolist()
+    
+    if st.button("🚀 Run Analysis (All US Stocks & ETFs)", use_container_width=True):
         results = []
         progress_bar = st.progress(0)
-        status_msg = st.empty()
+        status_text = st.empty()
         
-        for i in range(0, len(filtered_tickers), batch_size):
-            batch = filtered_tickers[i:i + batch_size]
-            status_msg.text(f"Processing batch {i//batch_size + 1}...")
+        batch_size = 150
+        
+        for i in range(0, len(filtered_list), batch_size):
+            batch = filtered_list[i:i + batch_size]
+            status_text.text(f"Processing batch {i//batch_size + 1} of {len(filtered_list)//batch_size + 1}...")
             
             try:
-                # auto_adjust=True fixes the LICN/SNDK split errors
+                # auto_adjust=True handles splits (Fixes LICN/SNDK errors)
                 data = yf.download(batch, start=start_date, end=end_date, auto_adjust=True, progress=False)
                 
                 if not data.empty and "Close" in data:
@@ -86,49 +79,68 @@ if st.button("🚀 Run Full Analysis", use_container_width=True):
                     for ticker in closes.columns:
                         series = closes[ticker].dropna()
                         if len(series) >= 2:
-                            # Verify existence at start (XDEF fix)
-                            if (series.index[0].date() - start_date).days <= 7:
-                                s_p = series.iloc[0]
-                                e_p = series.iloc[-1]
+                            # Verify Inception (Fixes XDEF errors)
+                            actual_start = series.index[0].date()
+                            if (actual_start - start_date).days <= 7:
+                                s_p = float(series.iloc[0])
+                                e_p = float(series.iloc[-1])
                                 
                                 if s_p >= min_price:
                                     pct = ((e_p / s_p) - 1) * 100
-                                    # Filter outliers
-                                    if -99.9 < pct < 2000:
+                                    # Filter outliers/data errors
+                                    if -99.9 < pct < 3000:
                                         results.append({
-                                            "Symbol": ticker,
-                                            "% Change": pct,
-                                            "Start Price": s_p,
-                                            "End Price": e_p
+                                            "Symbol": str(ticker),
+                                            "Pct_Change": round(pct, 2),
+                                            "Price_Start": round(s_p, 2),
+                                            "Price_End": round(e_p, 2)
                                         })
             except:
-                pass
+                continue # Skip failing batches
             
-            progress_bar.progress(min(1.0, (i + batch_size) / len(filtered_tickers)))
-            time.sleep(0.1)
-
+            progress_bar.progress(min(1.0, (i + batch_size) / len(filtered_list)))
+        
+        status_text.empty()
+        
         if results:
-            # Prepare data for display - explicitly cleaning to avoid Arrow errors
-            final_df = pd.DataFrame(results).copy()
-            final_df = final_df.merge(tickers_df, on='Symbol', how='left')
+            # Create Final Table
+            final_df = pd.DataFrame(results).merge(tickers_df, on='Symbol', how='left')
             
-            # Formatting and final data-type cleanup
-            final_df["% Change"] = final_df["% Change"].astype(float).round(2)
-            final_df["Start Price"] = final_df["Start Price"].astype(float).round(2)
-            final_df["End Price"] = final_df["End Price"].astype(float).round(2)
-            
-            status_msg.success(f"Analysis complete! {len(final_df)} symbols verified.")
+            st.success(f"Successfully verified {len(final_df)} symbols.")
             st.balloons()
-
-            c1, c2 = st.columns(2)
-            with c1:
-                st.subheader("🚀 Top 15 Gainers")
-                st.dataframe(final_df.sort_values("% Change", ascending=False).head(15), hide_index=True)
-            with c2:
-                st.subheader("📉 Top 15 Losers")
-                st.dataframe(final_df.sort_values("% Change", ascending=True).head(15), hide_index=True)
             
-            st.subheader("📊 Full Data Table")
-            st.dataframe(final_df, use_container_width=True)
+            # --- Layout Display ---
+            col1, col2 = st.columns(2)
+            
+            # Formatting config for tables
+            table_config = {
+                "Pct_Change": st.column_config.NumberColumn("Performance", format="%.2f%%"),
+                "Price_Start": st.column_config.NumberColumn("Start ($)"),
+                "Price_End": st.column_config.NumberColumn("End ($)")
+            }
+
+            with col1:
+                st.subheader("🚀 Top 15 Gainers")
+                st.dataframe(
+                    final_df.sort_values("Pct_Change", ascending=False).head(15), 
+                    hide_index=True, column_config=table_config, use_container_width=True
+                )
+            
+            with col2:
+                st.subheader("📉 Top 15 Losers")
+                st.dataframe(
+                    final_df.sort_values("Pct_Change", ascending=True).head(15), 
+                    hide_index=True, column_config=table_config, use_container_width=True
+                )
+            
+            st.divider()
+            st.subheader("📊 Full Sortable Dataset")
+            st.dataframe(final_df, use_container_width=True, column_config=table_config)
+            
+            # Download Button
+            csv = final_df.to_csv(index=False).encode('utf-8')
+            st.download_button("📥 Download Report (CSV)", data=csv, file_name=f"market_movers_{start_date}.csv")
         else:
-            status_msg.warning("No data returned. Adjust filters and try again.")
+            st.warning("No data found for the selected filters.")
+else:
+    st.error("The ticker database is currently offline. Please refresh.")
