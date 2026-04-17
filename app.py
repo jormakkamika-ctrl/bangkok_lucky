@@ -1,15 +1,29 @@
 import streamlit as st
 import pandas as pd
 import yfinance as yf
-import requests
-from datetime import date
+from datetime import date, datetime
 import time
+import random
 
-st.title("📈 All US Stocks & ETFs – Top Gainers/Losers")
-st.caption("🔗 Shareable with friends • Data from Yahoo Finance")
+# --- Page Config ---
+st.set_page_config(page_title="Market Analyst", layout="wide")
 
-# --- Load full ticker list from official NASDAQ (no CSV needed) ---
-@st.cache_data(ttl=86400)  # cache for 24 hours
+# --- 1. Sidebar Configuration & Safety Settings ---
+with st.sidebar:
+    st.header("⚙️ Controls")
+    start_date = st.date_input("Start Date", value=date(2025, 1, 1))
+    end_date = st.date_input("End Date", value=date.today())
+    
+    st.divider()
+    st.subheader("🛡️ Safety Settings")
+    batch_size = st.slider("Batch Size", 50, 300, 150, help="Smaller batches are safer but slower.")
+    pause_time = st.slider("Request Delay (sec)", 0.1, 2.0, 0.3, help="Prevents Yahoo from blocking your IP.")
+    
+    st.divider()
+    min_price = st.number_input("Min Stock Price ($)", value=1.0, help="Filters out penny stocks with glitchy data.")
+
+# --- 2. Ticker Loading with "Last Updated" Logic ---
+@st.cache_data(ttl=86400)
 def load_tickers():
     try:
         nasdaq = pd.read_csv("https://www.nasdaqtrader.com/dynamic/symdir/nasdaqlisted.txt", sep='|')
@@ -17,69 +31,109 @@ def load_tickers():
         nasdaq = nasdaq[['Symbol', 'Security Name']].copy()
         other = other[['ACT Symbol', 'Security Name']].rename(columns={'ACT Symbol': 'Symbol'}).copy()
         df = pd.concat([nasdaq, other], ignore_index=True).drop_duplicates(subset='Symbol')
-        return df
+        df = df[~df['Symbol'].str.contains(r'\$|\.|TEST', na=False)]
+        
+        # Add a timestamp to show when data was pulled
+        last_pulled = datetime.now().strftime("%Y-%m-%d %H:%M")
+        return df, last_pulled
     except:
-        st.error("Could not load ticker list")
-        return pd.DataFrame()
+        return pd.DataFrame(), "Failed to load"
 
-tickers_df = load_tickers()
+tickers_df, last_refreshed = load_tickers()
 all_tickers = tickers_df["Symbol"].tolist()
 
-st.info(f"Loaded **{len(all_tickers):,}** US stocks & ETFs")
+# --- Main App UI ---
+st.title("📈 Market Top Gainers & Losers")
+st.caption(f"Ticker list last synced: **{last_refreshed}**")
 
-col1, col2 = st.columns(2)
-start_date = col1.date_input("Start Date", value=date(2025, 1, 1))
-end_date   = col2.date_input("End Date", value=date.today())
-
-if st.button("🚀 Calculate % Change (30–90 seconds)"):
+if st.button("🚀 Run Full Analysis", use_container_width=True):
     if start_date >= end_date:
         st.error("End date must be after start date")
     else:
-        with st.spinner(f"Fetching prices for ~10,000 tickers… (this may take 30–90 seconds)"):
-            batch_size = 120
-            results = []
-            progress_bar = st.progress(0)
+        results = []
+        progress_bar = st.progress(0)
+        status_msg = st.empty()
+        
+        # --- 3. Implementation of Smart Batching ---
+        total_tickers = len(all_tickers)
+        
+        for i in range(0, total_tickers, batch_size):
+            batch = all_tickers[i:i + batch_size]
+            current_batch_num = (i // batch_size) + 1
+            total_batches = (total_tickers // batch_size) + 1
             
-            for i in range(0, len(all_tickers), batch_size):
-                batch = all_tickers[i:i + batch_size]
-                try:
-                    data = yf.download(
-                        tickers=batch,
-                        start=start_date,
-                        end=end_date,
-                        progress=False,
-                        threads=True,
-                        auto_adjust=True,
-                        timeout=30
-                    )
-                    if not data.empty and "Close" in data.columns:
-                        closes = data["Close"].dropna(how="all")
-                        if len(closes) >= 2:
-                            pct = (closes.iloc[-1] / closes.iloc[0] - 1) * 100
-                            temp = pd.DataFrame({"Symbol": pct.index, "% Change": pct.values})
-                            results.append(temp)
-                except Exception:
-                    pass  # skip bad batches quietly
-                progress_bar.progress(min(1.0, (i + batch_size) / len(all_tickers)))
-                time.sleep(0.3)
+            status_msg.info(f"Processing Batch {current_batch_num}/{total_batches}...")
+            
+            try:
+                # We pull 'Close' and 'Adj Close' to ensure we account for dividends/splits
+                data = yf.download(
+                    tickers=batch,
+                    start=start_date,
+                    end=end_date,
+                    progress=False,
+                    threads=True,
+                    group_by='column'
+                )
+                
+                if not data.empty and "Close" in data:
+                    closes = data["Close"].dropna(axis=1, how='all')
+                    
+                    if len(closes) >= 2:
+                        first_p = closes.iloc[0]
+                        last_p = closes.iloc[-1]
+                        
+                        # Calculation Logic
+                        pct = ((last_p / first_p) - 1) * 100
+                        
+                        # Filtering for Price & Validity
+                        temp = pd.DataFrame({
+                            "Symbol": pct.index, 
+                            "% Change": pct.values,
+                            "Last Price": last_p.values
+                        }).dropna()
+                        
+                        # Apply the "Min Price" safety filter
+                        temp = temp[temp["Last Price"] >= min_price]
+                        results.append(temp)
+            
+            except Exception as e:
+                # If a batch fails, we wait a bit longer then keep going
+                time.sleep(2)
+                continue
+                
+            # Update Progress UI
+            progress_perc = min(1.0, (i + batch_size) / total_tickers)
+            progress_bar.progress(progress_perc)
+            
+            # The "Safety Pause" - varies slightly to look more like natural traffic
+            time.sleep(pause_time + random.uniform(0, 0.2))
 
-            if results:
-                final_df = pd.concat(results, ignore_index=True)
-                final_df = final_df.merge(tickers_df[["Symbol", "Security Name"]], on="Symbol", how="left")
-                final_df = final_df.rename(columns={"Security Name": "Name"})
-                final_df = final_df.sort_values("% Change", ascending=False).round(2).reset_index(drop=True)
-                
-                st.success("✅ Done!")
-                
-                c1, c2 = st.columns(2)
-                c1.subheader("🚀 Top 15 Gainers")
-                c1.dataframe(final_df.head(15), use_container_width=True)
-                c2.subheader("📉 Top 15 Losers")
-                c2.dataframe(final_df.tail(15).sort_values("% Change"), use_container_width=True)
-                
-                st.subheader("Full sortable table")
-                st.dataframe(final_df, use_container_width=True)
-            else:
-                st.error("Yahoo rate limit hit. Wait 1–2 minutes and try again.")
+        if results:
+            final_df = pd.concat(results, ignore_index=True)
+            final_df = final_df.merge(tickers_df, on="Symbol", how="left")
+            final_df = final_df.rename(columns={"Security Name": "Name"})
+            
+            # Clean up the final list
+            final_df = final_df[final_df['% Change'].between(-99.9, 5000)]
+            final_df = final_df.sort_values("% Change", ascending=False).round(2).reset_index(drop=True)
+            
+            status_msg.success(f"Successfully analyzed {len(final_df)} stocks!")
+            st.balloons()
 
-st.caption("⚠️ For friends: First load can be slow. Same date pair becomes faster after the first use.")
+            # --- Display Results ---
+            col_a, col_b = st.columns(2)
+            with col_a:
+                st.subheader("🚀 Top 15 Gainers")
+                st.dataframe(final_df.head(15), use_container_width=True, hide_index=True)
+            with col_b:
+                st.subheader("📉 Top 15 Losers")
+                st.dataframe(final_df.tail(15).sort_values("% Change"), use_container_width=True, hide_index=True)
+                
+            # Full Data Export
+            st.divider()
+            st.download_button("📥 Download Results (CSV)", final_df.to_csv(index=False), "market_data.csv")
+        else:
+            status_msg.error("No data recovered. Yahoo may be rate-limiting you.")
+
+else:
+    st.info("Adjust settings in the sidebar and click 'Run Full Analysis' to start.")
