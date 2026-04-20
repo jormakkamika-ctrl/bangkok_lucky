@@ -1,3 +1,4 @@
+HTML<FILE filename="app_bangkok.py" size="~8200 bytes">
 import streamlit as st
 import pandas as pd
 import yfinance as yf
@@ -102,7 +103,7 @@ if not tickers_df.empty:
                                             
                                         results.append({
                                             "Symbol": str(ticker),
-                                            "Performance": round(pct, 2),
+                                            "Percentage Difference": round(pct, 2),   # ← Renamed for clarity (exactly what you asked for)
                                             "Price_Start": round(s_p, 2),
                                             "Price_End": round(e_p, 2),
                                             "Security Name": sec_name
@@ -118,32 +119,94 @@ if not tickers_df.empty:
             final_df = pd.DataFrame(results)
             st.success(f"Verified {len(final_df)} symbols successfully.")
             
+            # ====================== NEW: SECTOR & INDUSTRY ======================
+            status_text = st.empty()
+            status_text.text("🌐 Fetching Sector & Industry metadata (cached)...")
+            
+            @st.cache_data(ttl=7*86400)   # Cache for 7 days – very fast after first run
+            def get_sector_industry(symbol_list):
+                info_dict = {}
+                # Use yf.Tickers for batch efficiency (much faster than one-by-one)
+                try:
+                    tickers_obj = yf.Tickers(symbol_list)
+                    for sym in symbol_list:
+                        try:
+                            info = tickers_obj.tickers[sym].info
+                            info_dict[sym] = {
+                                "Sector": info.get("sector", "N/A"),
+                                "Industry": info.get("industry", "N/A")
+                            }
+                        except:
+                            info_dict[sym] = {"Sector": "N/A", "Industry": "N/A"}
+                except:
+                    # Fallback: one-by-one if batch fails
+                    for sym in symbol_list:
+                        try:
+                            t = yf.Ticker(sym)
+                            info = t.info
+                            info_dict[sym] = {
+                                "Sector": info.get("sector", "N/A"),
+                                "Industry": info.get("industry", "N/A")
+                            }
+                        except:
+                            info_dict[sym] = {"Sector": "N/A", "Industry": "N/A"}
+                return pd.DataFrame.from_dict(info_dict, orient="index")
+            
+            # Only enrich the symbols that survived all filters (very fast)
+            symbols_to_enrich = final_df["Symbol"].tolist()
+            enrich_df = get_sector_industry(symbols_to_enrich)
+            
+            # Merge sector/industry into main dataframe
+            final_df = final_df.merge(enrich_df, left_on="Symbol", right_index=True, how="left")
+            
+            # Nice column order
+            column_order = [
+                "Symbol", 
+                "Security Name", 
+                "Sector", 
+                "Industry", 
+                "Percentage Difference", 
+                "Price_Start", 
+                "Price_End"
+            ]
+            final_df = final_df[column_order]
+            
+            status_text.empty()
+            # ====================== END NEW SECTION ======================
+            
             # --- Results Display ---
             col1, col2 = st.columns(2)
             
-            # Table configuration for a professional look
+            # Updated table configuration (includes new columns)
             table_config = {
-                "Performance": st.column_config.NumberColumn("Change %", format="%.2f%%"),
+                "Percentage Difference": st.column_config.NumberColumn("Percentage Difference", format="%.2f%%"),
                 "Price_Start": st.column_config.NumberColumn("Start ($)"),
-                "Price_End": st.column_config.NumberColumn("End ($)")
+                "Price_End": st.column_config.NumberColumn("End ($)"),
+                "Sector": st.column_config.TextColumn("Sector"),
+                "Industry": st.column_config.TextColumn("Industry")
             }
 
             with col1:
                 st.subheader("🚀 Top 15 Gainers")
-                st.dataframe(final_df.sort_values("Performance", ascending=False).head(15), 
+                st.dataframe(final_df.sort_values("Percentage Difference", ascending=False).head(15), 
                              hide_index=True, column_config=table_config, use_container_width=True)
             
             with col2:
                 st.subheader("📉 Top 15 Losers")
-                st.dataframe(final_df.sort_values("Performance", ascending=True).head(15), 
+                st.dataframe(final_df.sort_values("Percentage Difference", ascending=True).head(15), 
                              hide_index=True, column_config=table_config, use_container_width=True)
             
             st.divider()
             st.subheader("📊 Full Market Table")
             st.dataframe(final_df, use_container_width=True, column_config=table_config)
             
-            # Allow friends to download the clean data
+            # Allow friends to download the clean data (NOW INCLUDES sector, industry, and percentage difference)
             csv = final_df.to_csv(index=False).encode('utf-8')
-            st.download_button("📥 Download Data", data=csv, file_name=f"market_report_{start_date}.csv")
+            st.download_button(
+                "📥 Download Data (with Sector & Industry)", 
+                data=csv, 
+                file_name=f"market_report_{start_date}.csv",
+                mime="text/csv"
+            )
         else:
             st.warning("No data found. Try lowering the 'Min Price' or adjusting the date range.")
