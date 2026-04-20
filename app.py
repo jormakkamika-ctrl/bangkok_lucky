@@ -123,14 +123,12 @@ if not tickers_df.empty:
         
         if results:
             final_df = pd.DataFrame(results)
-            st.success(f"Verified {len(final_df)} symbols successfully.")
+                        st.success(f"Verified {len(final_df)} symbols successfully.")
             
-                                    # ====================== FINAL DEBUG + BULLETPROOF VERSION ======================
+            # ====================== CLEAN & FIXED SECTOR/INDUSTRY SECTION ======================
             if enrich_metadata:
                 status_text = st.empty()
                 status_text.text("🌐 Fetching Sector & Industry metadata... (first run can take a few minutes)")
-                
-                import random
                 
                 @st.cache_data(ttl=7*86400, show_spinner=False)
                 def get_sector_industry(symbol_list):
@@ -179,10 +177,7 @@ if not tickers_df.empty:
                 final_df["Sector"] = "N/A"
                 final_df["Industry"] = "N/A"
             
-            # === DEBUG: Show us exactly what columns we have right now ===
-            st.write("🔍 DEBUG: Columns in final_df right now →", list(final_df.columns))
-            
-            # === FORCE every needed column to exist (this should kill the KeyError) ===
+            # Force all columns to exist (prevents any KeyError)
             for col, default in {
                 "Symbol": "",
                 "Security Name": "UNKNOWN",
@@ -195,7 +190,7 @@ if not tickers_df.empty:
                 if col not in final_df.columns:
                     final_df[col] = default
             
-            # Clean column order (change any way you want)
+            # Safe column reordering (this is the line that fixes the error)
             column_order = [
                 "Symbol", 
                 "Security Name", 
@@ -205,11 +200,8 @@ if not tickers_df.empty:
                 "Price_Start", 
                 "Price_End"
             ]
-            
-            # Use reindex instead of direct selection — this NEVER raises KeyError
             final_df = final_df.reindex(columns=column_order)
-            # ====================== END FINAL VERSION ======================
-            # ====================== END OPTIONAL SECTION ======================
+            # ====================== END CLEAN SECTION ======================
             
             status_text.empty()
             
