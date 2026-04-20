@@ -1,4 +1,3 @@
-HTML<FILE filename="app_bangkok.py" size="~8200 bytes">
 import streamlit as st
 import pandas as pd
 import yfinance as yf
