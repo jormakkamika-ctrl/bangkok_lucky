@@ -127,11 +127,12 @@ if not tickers_df.empty:
             
                                     # ====================== OPTIONAL & FASTER: Sector & Industry ======================
                         # ====================== FIXED: Sector & Industry (no more CacheReplayClosureError) ======================
+                        # ====================== BULLETPROOF: Sector & Industry (fixes KeyError) ======================
             if enrich_metadata:
                 status_text = st.empty()
-                status_text.text("🌐 Fetching Sector & Industry metadata... (first run can take several minutes)")
+                status_text.text("🌐 Fetching Sector & Industry metadata... (first run can take a few minutes)")
                 
-                import random   # ← safe to have here
+                import random   # ← needed for jitter
                 
                 @st.cache_data(ttl=7*86400, show_spinner=False)
                 def get_sector_industry(symbol_list):
@@ -140,7 +141,6 @@ if not tickers_df.empty:
                     
                     for i in range(0, len(symbol_list), batch_size):
                         batch = symbol_list[i:i + batch_size]
-                        
                         try:
                             tickers_obj = yf.Tickers(batch)
                             for sym in batch:
@@ -173,10 +173,8 @@ if not tickers_df.empty:
                     
                     return pd.DataFrame.from_dict(info_dict, orient="index")
                 
-                # Call it (clean – no UI inside the cached function)
                 symbols_to_enrich = final_df["Symbol"].tolist()
                 enrich_df = get_sector_industry(symbols_to_enrich)
-                
                 final_df = final_df.merge(enrich_df, left_on="Symbol", right_index=True, how="left")
                 status_text.empty()
                 st.success("✅ Sector & Industry data loaded!")
@@ -184,18 +182,24 @@ if not tickers_df.empty:
                 final_df["Sector"] = "N/A"
                 final_df["Industry"] = "N/A"
             
-            # Clean column order (change this list however you like)
+            # SAFETY CHECK — guarantees the columns always exist (this fixes the KeyError)
+            if "Sector" not in final_df.columns:
+                final_df["Sector"] = "N/A"
+            if "Industry" not in final_df.columns:
+                final_df["Industry"] = "N/A"
+            
+            # Clean column order (change this list any way you want)
             column_order = [
                 "Symbol", 
                 "Security Name", 
-                "Price_Start", 
-                "Price_End",
-                "Percentage Difference",
                 "Sector", 
-                "Industry" 
+                "Industry", 
+                "Percentage Difference", 
+                "Price_Start", 
+                "Price_End"
             ]
             final_df = final_df[column_order]
-            # ====================== END FIXED SECTION ======================
+            # ====================== END BULLETPROOF SECTION ======================
             # ====================== END OPTIONAL SECTION ======================
             
             status_text.empty()
