@@ -39,7 +39,7 @@ with st.sidebar:
     st.divider()
     selected_types = st.multiselect("Asset Type", ["Stock", "ETF"], default=["Stock", "ETF"])
     min_price = st.number_input("Min Price ($) at Start", value=5.0)
-        st.divider()
+    st.divider()
     selected_types = st.multiselect("Asset Type", ["Stock", "ETF"], default=["Stock", "ETF"])
     min_price = st.number_input("Min Price ($) at Start", value=5.0)
     
