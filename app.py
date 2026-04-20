@@ -123,7 +123,8 @@ if not tickers_df.empty:
         
         if results:
             final_df = pd.DataFrame(results)
-st.success(f"Verified {len(final_df)} symbols successfully.")
+            
+            st.success(f"Verified {len(final_df)} symbols successfully.")
             
             # ====================== CLEAN & FIXED SECTOR/INDUSTRY SECTION ======================
             if enrich_metadata:
