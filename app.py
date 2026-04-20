@@ -39,7 +39,18 @@ with st.sidebar:
     st.divider()
     selected_types = st.multiselect("Asset Type", ["Stock", "ETF"], default=["Stock", "ETF"])
     min_price = st.number_input("Min Price ($) at Start", value=5.0)
+        st.divider()
+    selected_types = st.multiselect("Asset Type", ["Stock", "ETF"], default=["Stock", "ETF"])
+    min_price = st.number_input("Min Price ($) at Start", value=5.0)
     
+    # ←←← ADD THESE TWO LINES HERE
+    st.divider()
+    enrich_metadata = st.checkbox("🌐 Enrich with Sector & Industry", 
+                                  value=True,
+                                  help="Uncheck if the app times out or feels stuck. Makes analysis much faster.")
+
+    st.divider()
+    st.caption("Using Python 3.12 Optimized Engine")
     st.divider()
     st.caption("Using Python 3.12 Optimized Engine")
 
@@ -118,76 +129,80 @@ if not tickers_df.empty:
             final_df = pd.DataFrame(results)
             st.success(f"Verified {len(final_df)} symbols successfully.")
             
-                        # ====================== ULTRA-ROBUST: Sector & Industry (with random jitter) ======================
-            status_text = st.empty()
-            status_text.text("🌐 Fetching Sector & Industry metadata (with anti-rate-limit jitter)...")
-            
-            import random   # ← Add this line (only needed once)
-
-            @st.cache_data(ttl=7*86400)
-            def get_sector_industry(symbol_list):
-                info_dict = {}
-                batch_size = 25   # keep this size — it’s the sweet spot
+                                    # ====================== OPTIONAL & FASTER: Sector & Industry ======================
+            if enrich_metadata:
+                status_text = st.empty()
+                status_text.text("🌐 Fetching Sector & Industry metadata (with progress)...")
                 
-                for i in range(0, len(symbol_list), batch_size):
-                    batch = symbol_list[i:i + batch_size]
-                    status_text.text(f"🌐 Fetching batch {i//batch_size + 1} of {len(symbol_list)//batch_size + 1} (with jitter)...")
+                import random  # (safe to have here)
+                
+                @st.cache_data(ttl=7*86400)
+                def get_sector_industry(symbol_list):
+                    info_dict = {}
+                    batch_size = 40   # bigger batches = faster overall
                     
-                    try:
-                        # Try batch first
-                        tickers_obj = yf.Tickers(batch)
-                        for sym in batch:
-                            try:
-                                info = tickers_obj.tickers[sym].info
-                                info_dict[sym] = {
-                                    "Sector": info.get("sector", "N/A"),
-                                    "Industry": info.get("industry", "N/A")
-                                }
-                            except:
-                                info_dict[sym] = {"Sector": "N/A", "Industry": "N/A"}
-                    except:
-                        # Fallback: one-by-one with retries
-                        for sym in batch:
-                            for attempt in range(3):
+                    for i in range(0, len(symbol_list), batch_size):
+                        batch = symbol_list[i:i + batch_size]
+                        status_text.text(
+                            f"🌐 Fetching batch {i//batch_size + 1} of {len(symbol_list)//batch_size + 1}..."
+                        )
+                        
+                        try:
+                            tickers_obj = yf.Tickers(batch)
+                            for sym in batch:
                                 try:
-                                    t = yf.Ticker(sym)
-                                    info = t.info
+                                    info = tickers_obj.tickers[sym].info
                                     info_dict[sym] = {
                                         "Sector": info.get("sector", "N/A"),
                                         "Industry": info.get("industry", "N/A")
                                     }
-                                    break
                                 except:
-                                    time.sleep(random.uniform(0.8, 1.8))  # jitter on retry
-                            else:
-                                info_dict[sym] = {"Sector": "N/A", "Industry": "N/A"}
+                                    info_dict[sym] = {"Sector": "N/A", "Industry": "N/A"}
+                        except:
+                            # fallback one-by-one
+                            for sym in batch:
+                                for attempt in range(3):
+                                    try:
+                                        t = yf.Ticker(sym)
+                                        info = t.info
+                                        info_dict[sym] = {
+                                            "Sector": info.get("sector", "N/A"),
+                                            "Industry": info.get("industry", "N/A")
+                                        }
+                                        break
+                                    except:
+                                        time.sleep(random.uniform(0.7, 1.4))
+                                else:
+                                    info_dict[sym] = {"Sector": "N/A", "Industry": "N/A"}
+                        
+                        time.sleep(random.uniform(0.9, 2.3))   # lighter jitter
                     
-                    # ← THIS IS THE NEW PART YOU ASKED FOR
-                    time.sleep(random.uniform(1.8, 4.5))  # generous random jitter
+                    return pd.DataFrame.from_dict(info_dict, orient="index")
                 
-                return pd.DataFrame.from_dict(info_dict, orient="index")
+                symbols_to_enrich = final_df["Symbol"].tolist()
+                enrich_df = get_sector_industry(symbols_to_enrich)
+                final_df = final_df.merge(enrich_df, left_on="Symbol", right_index=True, how="left")
+                
+                status_text.empty()
+            else:
+                # Fast path – no metadata
+                final_df["Sector"] = "N/A"
+                final_df["Industry"] = "N/A"
             
-            # Only enrich the symbols that survived filters
-            symbols_to_enrich = final_df["Symbol"].tolist()
-            enrich_df = get_sector_industry(symbols_to_enrich)
-            
-            # Merge
-            final_df = final_df.merge(enrich_df, left_on="Symbol", right_index=True, how="left")
-            
-            # Clean column order
+            # Clean column order (change this list any way you like)
             column_order = [
                 "Symbol", 
-                "Security Name",
+                "Security Name", 
                 "Price_Start", 
                 "Price_End",
-                "Percentage Difference",
+                "Percentage Difference", 
                 "Sector", 
-                "Industry"
+                "Industry" 
             ]
             final_df = final_df[column_order]
+            # ====================== END OPTIONAL SECTION ======================
             
             status_text.empty()
-            # ====================== END ULTRA-ROBUST SECTION ======================
             
             # Only enrich the symbols that survived all filters (very fast)
             symbols_to_enrich = final_df["Symbol"].tolist()
