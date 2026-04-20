@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import yfinance as yf
 from datetime import date
+import random
 import time
 
 # --- 1. Page Config ---
@@ -125,22 +126,20 @@ if not tickers_df.empty:
             st.success(f"Verified {len(final_df)} symbols successfully.")
             
                                     # ====================== OPTIONAL & FASTER: Sector & Industry ======================
+                        # ====================== FIXED: Sector & Industry (no more CacheReplayClosureError) ======================
             if enrich_metadata:
                 status_text = st.empty()
-                status_text.text("🌐 Fetching Sector & Industry metadata (with progress)...")
+                status_text.text("🌐 Fetching Sector & Industry metadata... (first run can take several minutes)")
                 
-                import random  # (safe to have here)
+                import random   # ← safe to have here
                 
-                @st.cache_data(ttl=7*86400)
+                @st.cache_data(ttl=7*86400, show_spinner=False)
                 def get_sector_industry(symbol_list):
                     info_dict = {}
-                    batch_size = 40   # bigger batches = faster overall
+                    batch_size = 40
                     
                     for i in range(0, len(symbol_list), batch_size):
                         batch = symbol_list[i:i + batch_size]
-                        status_text.text(
-                            f"🌐 Fetching batch {i//batch_size + 1} of {len(symbol_list)//batch_size + 1}..."
-                        )
                         
                         try:
                             tickers_obj = yf.Tickers(batch)
@@ -170,31 +169,33 @@ if not tickers_df.empty:
                                 else:
                                     info_dict[sym] = {"Sector": "N/A", "Industry": "N/A"}
                         
-                        time.sleep(random.uniform(0.9, 2.3))   # lighter jitter
+                        time.sleep(random.uniform(0.9, 2.3))
                     
                     return pd.DataFrame.from_dict(info_dict, orient="index")
                 
+                # Call it (clean – no UI inside the cached function)
                 symbols_to_enrich = final_df["Symbol"].tolist()
                 enrich_df = get_sector_industry(symbols_to_enrich)
-                final_df = final_df.merge(enrich_df, left_on="Symbol", right_index=True, how="left")
                 
+                final_df = final_df.merge(enrich_df, left_on="Symbol", right_index=True, how="left")
                 status_text.empty()
+                st.success("✅ Sector & Industry data loaded!")
             else:
-                # Fast path – no metadata
                 final_df["Sector"] = "N/A"
                 final_df["Industry"] = "N/A"
             
-            # Clean column order (change this list any way you like)
+            # Clean column order (change this list however you like)
             column_order = [
                 "Symbol", 
                 "Security Name", 
                 "Price_Start", 
                 "Price_End",
-                "Percentage Difference", 
+                "Percentage Difference",
                 "Sector", 
                 "Industry" 
             ]
             final_df = final_df[column_order]
+            # ====================== END FIXED SECTION ======================
             # ====================== END OPTIONAL SECTION ======================
             
             status_text.empty()
