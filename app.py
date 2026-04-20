@@ -125,14 +125,12 @@ if not tickers_df.empty:
             final_df = pd.DataFrame(results)
             st.success(f"Verified {len(final_df)} symbols successfully.")
             
-                                    # ====================== OPTIONAL & FASTER: Sector & Industry ======================
-                        # ====================== FIXED: Sector & Industry (no more CacheReplayClosureError) ======================
-                        # ====================== BULLETPROOF: Sector & Industry (fixes KeyError) ======================
+                         # ====================== ULTRA-SAFE: Sector & Industry (100% KeyError-proof) ======================
             if enrich_metadata:
                 status_text = st.empty()
                 status_text.text("🌐 Fetching Sector & Industry metadata... (first run can take a few minutes)")
                 
-                import random   # ← needed for jitter
+                import random   # ← for jitter
                 
                 @st.cache_data(ttl=7*86400, show_spinner=False)
                 def get_sector_industry(symbol_list):
@@ -153,7 +151,7 @@ if not tickers_df.empty:
                                 except:
                                     info_dict[sym] = {"Sector": "N/A", "Industry": "N/A"}
                         except:
-                            # fallback one-by-one
+                            # fallback
                             for sym in batch:
                                 for attempt in range(3):
                                     try:
@@ -182,13 +180,23 @@ if not tickers_df.empty:
                 final_df["Sector"] = "N/A"
                 final_df["Industry"] = "N/A"
             
-            # SAFETY CHECK — guarantees the columns always exist (this fixes the KeyError)
-            if "Sector" not in final_df.columns:
-                final_df["Sector"] = "N/A"
-            if "Industry" not in final_df.columns:
-                final_df["Industry"] = "N/A"
+            # === NEW ULTRA-SAFE GUARD (this fixes the KeyError forever) ===
+            # Force every single column we need to exist before reordering
+            required_columns = {
+                "Symbol": "",
+                "Security Name": "UNKNOWN",
+                "Sector": "N/A",
+                "Industry": "N/A",
+                "Percentage Difference": 0.0,
+                "Price_Start": 0.0,
+                "Price_End": 0.0
+            }
             
-            # Clean column order (change this list any way you want)
+            for col, default_value in required_columns.items():
+                if col not in final_df.columns:
+                    final_df[col] = default_value
+            
+            # Clean column order (you can change this list any way you want)
             column_order = [
                 "Symbol", 
                 "Security Name", 
@@ -199,7 +207,7 @@ if not tickers_df.empty:
                 "Price_End"
             ]
             final_df = final_df[column_order]
-            # ====================== END BULLETPROOF SECTION ======================
+            # ====================== END ULTRA-SAFE SECTION ======================
             # ====================== END OPTIONAL SECTION ======================
             
             status_text.empty()
