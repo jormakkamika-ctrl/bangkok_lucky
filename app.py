@@ -39,18 +39,13 @@ with st.sidebar:
     st.divider()
     selected_types = st.multiselect("Asset Type", ["Stock", "ETF"], default=["Stock", "ETF"])
     min_price = st.number_input("Min Price ($) at Start", value=5.0)
-    st.divider()
-    selected_types = st.multiselect("Asset Type", ["Stock", "ETF"], default=["Stock", "ETF"])
-    min_price = st.number_input("Min Price ($) at Start", value=5.0)
     
-    # ←←← ADD THESE TWO LINES HERE
+    # ← New checkbox (exactly where it should be)
     st.divider()
     enrich_metadata = st.checkbox("🌐 Enrich with Sector & Industry", 
                                   value=True,
                                   help="Uncheck if the app times out or feels stuck. Makes analysis much faster.")
 
-    st.divider()
-    st.caption("Using Python 3.12 Optimized Engine")
     st.divider()
     st.caption("Using Python 3.12 Optimized Engine")
 
