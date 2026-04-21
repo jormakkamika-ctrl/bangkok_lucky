@@ -213,7 +213,7 @@ if not tickers_df.empty:
             # Merge sector/industry into main dataframe
             final_df = final_df.merge(enrich_df, left_on="Symbol", right_index=True, how="left")
             
-            # Nice column order
+                        # Safe column ordering (this version can never raise KeyError)
             column_order = [
                 "Symbol", 
                 "Security Name", 
@@ -223,7 +223,7 @@ if not tickers_df.empty:
                 "Price_Start", 
                 "Price_End"
             ]
-            final_df = final_df[column_order]
+            final_df = final_df.reindex(columns=column_order)
             
             status_text.empty()
             # ====================== END NEW SECTION ======================
