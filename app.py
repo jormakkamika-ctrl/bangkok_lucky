@@ -124,7 +124,7 @@ if not tickers_df.empty:
         if results:
             final_df = pd.DataFrame(results)
             
-                        st.success(f"Verified {len(final_df)} symbols successfully.")
+        st.success(f"Verified {len(final_df)} symbols successfully.")
             
             # ====================== STRONGER WIGGLE TIME (more patient) ======================
             if enrich_metadata:
