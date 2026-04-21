@@ -124,20 +124,24 @@ if not tickers_df.empty:
         if results:
             final_df = pd.DataFrame(results)
             
-            st.success(f"Verified {len(final_df)} symbols successfully.")
+                        st.success(f"Verified {len(final_df)} symbols successfully.")
             
-            # ====================== CLEAN & FIXED SECTOR/INDUSTRY SECTION ======================
+            # ====================== STRONGER WIGGLE TIME (more patient) ======================
             if enrich_metadata:
                 status_text = st.empty()
-                status_text.text("🌐 Fetching Sector & Industry metadata... (first run can take a few minutes)")
+                status_text.text("🌐 Fetching Sector & Industry (stronger anti-throttle wiggle time)...")
                 
                 @st.cache_data(ttl=7*86400, show_spinner=False)
                 def get_sector_industry(symbol_list):
                     info_dict = {}
-                    batch_size = 40
+                    batch_size = 20   # smaller = much more reliable
                     
                     for i in range(0, len(symbol_list), batch_size):
                         batch = symbol_list[i:i + batch_size]
+                        status_text.text(
+                            f"🌐 Fetching batch {i//batch_size + 1} of {len(symbol_list)//batch_size + 1} (with strong wiggle)..."
+                        )
+                        
                         try:
                             tickers_obj = yf.Tickers(batch)
                             for sym in batch:
@@ -150,8 +154,9 @@ if not tickers_df.empty:
                                 except:
                                     info_dict[sym] = {"Sector": "N/A", "Industry": "N/A"}
                         except:
+                            # fallback one-by-one with extra patience
                             for sym in batch:
-                                for attempt in range(3):
+                                for attempt in range(4):   # more retries
                                     try:
                                         t = yf.Ticker(sym)
                                         info = t.info
@@ -161,11 +166,12 @@ if not tickers_df.empty:
                                         }
                                         break
                                     except:
-                                        time.sleep(random.uniform(0.7, 1.4))
+                                        time.sleep(random.uniform(1.5, 3.0))
                                 else:
                                     info_dict[sym] = {"Sector": "N/A", "Industry": "N/A"}
                         
-                        time.sleep(random.uniform(0.9, 2.3))
+                        # ← STRONGER WIGGLE TIME (this is what you asked for)
+                        time.sleep(random.uniform(4.5, 9.0))   # generous random pause
                     
                     return pd.DataFrame.from_dict(info_dict, orient="index")
                 
@@ -178,20 +184,15 @@ if not tickers_df.empty:
                 final_df["Sector"] = "N/A"
                 final_df["Industry"] = "N/A"
             
-            # Force all columns to exist (prevents any KeyError)
+            # Safety guard (in case anything is still missing)
             for col, default in {
-                "Symbol": "",
-                "Security Name": "UNKNOWN",
                 "Sector": "N/A",
-                "Industry": "N/A",
-                "Percentage Difference": 0.0,
-                "Price_Start": 0.0,
-                "Price_End": 0.0
+                "Industry": "N/A"
             }.items():
                 if col not in final_df.columns:
                     final_df[col] = default
             
-            # Safe column reordering (this is the line that fixes the error)
+            # Safe column reordering
             column_order = [
                 "Symbol", 
                 "Security Name", 
@@ -202,30 +203,7 @@ if not tickers_df.empty:
                 "Price_End"
             ]
             final_df = final_df.reindex(columns=column_order)
-            # ====================== END CLEAN SECTION ======================
-            
-            status_text.empty()
-            
-            # Only enrich the symbols that survived all filters (very fast)
-            symbols_to_enrich = final_df["Symbol"].tolist()
-            enrich_df = get_sector_industry(symbols_to_enrich)
-            
-            # Merge sector/industry into main dataframe
-            final_df = final_df.merge(enrich_df, left_on="Symbol", right_index=True, how="left")
-            
-                        # Safe column ordering (this version can never raise KeyError)
-            column_order = [
-                "Symbol", 
-                "Security Name", 
-                "Sector", 
-                "Industry", 
-                "Percentage Difference", 
-                "Price_Start", 
-                "Price_End"
-            ]
-            final_df = final_df.reindex(columns=column_order)
-            
-            status_text.empty()
+            # ====================== END STRONGER WIGGLE SECTION ======================
             # ====================== END NEW SECTION ======================
             
             # --- Results Display ---
