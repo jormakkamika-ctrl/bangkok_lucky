@@ -196,11 +196,11 @@ if not tickers_df.empty:
             column_order = [
                 "Symbol", 
                 "Security Name", 
-                "Sector", 
-                "Industry", 
-                "Percentage Difference", 
                 "Price_Start", 
-                "Price_End"
+                "Price_End",
+                "Percentage Difference",
+                "Sector", 
+                "Industry"
             ]
             final_df = final_df.reindex(columns=column_order)
             # ====================== END STRONGER WIGGLE SECTION ======================
