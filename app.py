@@ -135,17 +135,17 @@ if not tickers_df.empty:
             
             st.success(f"Verified {len(final_df)} symbols successfully.")
             
-            # ====================== FIXED: Shuffle + Stronger Warm-up ======================
+            # ====================== FIXED: No more raw JSON spam ======================
             if enrich_metadata and len(final_df) > 0:
                 status_text = st.empty()
-                status_text.text(f"🌐 Shuffling symbols + enriching Sector & Industry (up to {max_enrich} symbols)...")
+                status_text.text(f"🌐 Enriching Sector & Industry for up to {max_enrich} symbols (shuffled)...")
                 
                 @st.cache_data(ttl=7*86400, show_spinner=False)
                 def get_sector_industry(symbol_list):
                     info_dict = {}
                     batch_size = 15
                     
-                    # === STRONGER WARM-UP (multiple big tickers) ===
+                    # Strong warm-up
                     warm_up_tickers = ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA"]
                     for wt in warm_up_tickers:
                         try:
@@ -154,16 +154,13 @@ if not tickers_df.empty:
                         except:
                             pass
                     
-                    # === SHUFFLE symbols so the bad "first batch" curse is gone ===
+                    # Shuffle to avoid first-batch throttling
                     import random
                     shuffled_list = symbol_list.copy()
                     random.shuffle(shuffled_list)
                     
                     for i in range(0, len(shuffled_list), batch_size):
                         batch = shuffled_list[i:i + batch_size]
-                        status_text.text(
-                            f"🌐 Batch {i//batch_size + 1} of {len(shuffled_list)//batch_size + 1} (shuffled)..."
-                        )
                         
                         try:
                             tickers_obj = yf.Tickers(batch)
@@ -177,7 +174,6 @@ if not tickers_df.empty:
                                 except:
                                     info_dict[sym] = {"Sector": "N/A", "Industry": "N/A"}
                         except:
-                            # Heavy fallback
                             for sym in batch:
                                 for attempt in range(5):
                                     try:
@@ -193,12 +189,10 @@ if not tickers_df.empty:
                                 else:
                                     info_dict[sym] = {"Sector": "N/A", "Industry": "N/A"}
                         
-                        # Stronger jitter
                         time.sleep(random.uniform(6.0, 11.0))
                     
                     return pd.DataFrame.from_dict(info_dict, orient="index")
                 
-                # Limit + shuffle protection
                 symbols_to_enrich = final_df["Symbol"].tolist()
                 if max_enrich > 0:
                     symbols_to_enrich = symbols_to_enrich[:max_enrich]
@@ -213,7 +207,7 @@ if not tickers_df.empty:
                 final_df["Sector"] = "N/A"
                 final_df["Industry"] = "N/A"
             
-            # Final safety guards
+            # Safety guards
             for col in ["Sector", "Industry"]:
                 if col not in final_df.columns:
                     final_df[col] = "N/A"
