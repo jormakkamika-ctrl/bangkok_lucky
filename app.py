@@ -41,15 +41,24 @@ with st.sidebar:
     selected_types = st.multiselect("Asset Type", ["Stock", "ETF"], default=["Stock", "ETF"])
     min_price = st.number_input("Min Price ($) at Start", value=5.0)
     
-    # ← New checkbox (exactly where it should be)
+    # ←←← Enrich with Sector & Industry
     st.divider()
-    enrich_metadata = st.checkbox("🌐 Enrich with Sector & Industry", 
+    enrich_metadata = st.checkbox("🌐 Enrich with Sector & Industry",
                                   value=True,
                                   help="Uncheck if the app times out or feels stuck. Makes analysis much faster.")
-
+    
+    # ←←← NEW: Max symbols slider (this is what lets you get ALL stocks)
+    max_enrich = st.number_input(
+        "🔢 Max symbols to enrich", 
+        value=1000, 
+        min_value=0,
+        step=500,
+        help="""0 = try to enrich ALL symbols (can take 15-25+ minutes).
+Start with 1000–2000 to avoid timeout.
+You can run the analysis multiple times — the app remembers previous results.""")
+    
     st.divider()
     st.caption("Using Python 3.12 Optimized Engine")
-
 # --- 4. Main App Logic ---
 st.title("📊 US Market: Top Performance")
 
@@ -126,28 +135,26 @@ if not tickers_df.empty:
             
             st.success(f"Verified {len(final_df)} symbols successfully.")
             
-            # ====================== ULTRA-PATIENT VERSION (fixes early alphabetical failures) ======================
-            if enrich_metadata:
+            # ====================== CLEAN + ROBUST FINAL SECTION ======================
+            if enrich_metadata and len(final_df) > 0:
                 status_text = st.empty()
-                status_text.text("🌐 Warming up Yahoo + fetching Sector & Industry (very patient mode)...")
+                status_text.text(f"🌐 Enriching Sector & Industry for up to {max_enrich} symbols...")
                 
                 @st.cache_data(ttl=7*86400, show_spinner=False)
                 def get_sector_industry(symbol_list):
                     info_dict = {}
-                    batch_size = 15   # smaller = much safer
+                    batch_size = 15
                     
-                    # === WARM-UP: Fetch one big ticker first to "wake up" Yahoo ===
+                    # Warm-up
                     try:
-                        warm_up = yf.Ticker("AAPL").info
+                        yf.Ticker("AAPL").info
                         time.sleep(random.uniform(3.0, 6.0))
                     except:
                         pass
                     
                     for i in range(0, len(symbol_list), batch_size):
                         batch = symbol_list[i:i + batch_size]
-                        status_text.text(
-                            f"🌐 Fetching batch {i//batch_size + 1} of {len(symbol_list)//batch_size + 1} (patient mode)..."
-                        )
+                        status_text.text(f"🌐 Batch {i//batch_size + 1} of {len(symbol_list)//batch_size + 1}...")
                         
                         try:
                             tickers_obj = yf.Tickers(batch)
@@ -161,9 +168,8 @@ if not tickers_df.empty:
                                 except:
                                     info_dict[sym] = {"Sector": "N/A", "Industry": "N/A"}
                         except:
-                            # Heavy fallback with extra patience
                             for sym in batch:
-                                for attempt in range(5):   # more retries
+                                for attempt in range(5):
                                     try:
                                         t = yf.Ticker(sym)
                                         info = t.info
@@ -177,41 +183,43 @@ if not tickers_df.empty:
                                 else:
                                     info_dict[sym] = {"Sector": "N/A", "Industry": "N/A"}
                         
-                        # Progressive wiggle — longer delays early on
-                        delay = random.uniform(6.0, 11.0) if i < 200 else random.uniform(4.0, 8.0)
-                        time.sleep(delay)
+                        time.sleep(random.uniform(5.5, 10.0))
                     
                     return pd.DataFrame.from_dict(info_dict, orient="index")
                 
-                # Clear any stale N/A cache from previous runs
-                get_sector_industry.clear()
-                
                 symbols_to_enrich = final_df["Symbol"].tolist()
+                if max_enrich > 0:
+                    symbols_to_enrich = symbols_to_enrich[:max_enrich]
+                
+                get_sector_industry.clear()
                 enrich_df = get_sector_industry(symbols_to_enrich)
                 final_df = final_df.merge(enrich_df, left_on="Symbol", right_index=True, how="left")
                 status_text.empty()
-                st.success("✅ Sector & Industry data loaded!")
+                st.success(f"✅ Sector & Industry loaded for {len(symbols_to_enrich)} symbols!")
+            
             else:
                 final_df["Sector"] = "N/A"
                 final_df["Industry"] = "N/A"
             
-            # Final safety guard
-            for col, default in {"Sector": "N/A", "Industry": "N/A"}.items():
+            # === FINAL SAFETY GUARDS (prevents all column errors) ===
+            for col, default in {
+                "Sector": "N/A",
+                "Industry": "N/A",
+                "Percentage Difference": 0.0,
+                "Price_Start": 0.0,
+                "Price_End": 0.0,
+                "Security Name": "UNKNOWN"
+            }.items():
                 if col not in final_df.columns:
                     final_df[col] = default
             
+            # Safe column ordering
             column_order = [
-                "Symbol", 
-                "Security Name", 
-                "Price_Start", 
-                "Price_End",
-                "Percentage Difference"
-                "Sector", 
-                "Industry"
+                "Symbol", "Security Name", "Sector", "Industry",
+                "Percentage Difference", "Price_Start", "Price_End"
             ]
             final_df = final_df.reindex(columns=column_order)
-            # ====================== END ULTRA-PATIENT SECTION ======================
-            # ====================== END NEW SECTION ======================
+            # ====================== END CLEAN SECTION ======================
             
             # --- Results Display ---
             col1, col2 = st.columns(2)
