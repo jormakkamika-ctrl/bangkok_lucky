@@ -135,26 +135,35 @@ if not tickers_df.empty:
             
             st.success(f"Verified {len(final_df)} symbols successfully.")
             
-            # ====================== CLEAN + ROBUST FINAL SECTION ======================
+            # ====================== FIXED: Shuffle + Stronger Warm-up ======================
             if enrich_metadata and len(final_df) > 0:
                 status_text = st.empty()
-                status_text.text(f"🌐 Enriching Sector & Industry for up to {max_enrich} symbols...")
+                status_text.text(f"🌐 Shuffling symbols + enriching Sector & Industry (up to {max_enrich} symbols)...")
                 
                 @st.cache_data(ttl=7*86400, show_spinner=False)
                 def get_sector_industry(symbol_list):
                     info_dict = {}
                     batch_size = 15
                     
-                    # Warm-up
-                    try:
-                        yf.Ticker("AAPL").info
-                        time.sleep(random.uniform(3.0, 6.0))
-                    except:
-                        pass
+                    # === STRONGER WARM-UP (multiple big tickers) ===
+                    warm_up_tickers = ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA"]
+                    for wt in warm_up_tickers:
+                        try:
+                            yf.Ticker(wt).info
+                            time.sleep(random.uniform(2.5, 5.0))
+                        except:
+                            pass
                     
-                    for i in range(0, len(symbol_list), batch_size):
-                        batch = symbol_list[i:i + batch_size]
-                        status_text.text(f"🌐 Batch {i//batch_size + 1} of {len(symbol_list)//batch_size + 1}...")
+                    # === SHUFFLE symbols so the bad "first batch" curse is gone ===
+                    import random
+                    shuffled_list = symbol_list.copy()
+                    random.shuffle(shuffled_list)
+                    
+                    for i in range(0, len(shuffled_list), batch_size):
+                        batch = shuffled_list[i:i + batch_size]
+                        status_text.text(
+                            f"🌐 Batch {i//batch_size + 1} of {len(shuffled_list)//batch_size + 1} (shuffled)..."
+                        )
                         
                         try:
                             tickers_obj = yf.Tickers(batch)
@@ -168,6 +177,7 @@ if not tickers_df.empty:
                                 except:
                                     info_dict[sym] = {"Sector": "N/A", "Industry": "N/A"}
                         except:
+                            # Heavy fallback
                             for sym in batch:
                                 for attempt in range(5):
                                     try:
@@ -183,10 +193,12 @@ if not tickers_df.empty:
                                 else:
                                     info_dict[sym] = {"Sector": "N/A", "Industry": "N/A"}
                         
-                        time.sleep(random.uniform(5.5, 10.0))
+                        # Stronger jitter
+                        time.sleep(random.uniform(6.0, 11.0))
                     
                     return pd.DataFrame.from_dict(info_dict, orient="index")
                 
+                # Limit + shuffle protection
                 symbols_to_enrich = final_df["Symbol"].tolist()
                 if max_enrich > 0:
                     symbols_to_enrich = symbols_to_enrich[:max_enrich]
@@ -201,25 +213,17 @@ if not tickers_df.empty:
                 final_df["Sector"] = "N/A"
                 final_df["Industry"] = "N/A"
             
-            # === FINAL SAFETY GUARDS (prevents all column errors) ===
-            for col, default in {
-                "Sector": "N/A",
-                "Industry": "N/A",
-                "Percentage Difference": 0.0,
-                "Price_Start": 0.0,
-                "Price_End": 0.0,
-                "Security Name": "UNKNOWN"
-            }.items():
+            # Final safety guards
+            for col in ["Sector", "Industry"]:
                 if col not in final_df.columns:
-                    final_df[col] = default
+                    final_df[col] = "N/A"
             
-            # Safe column ordering
             column_order = [
                 "Symbol", "Security Name", "Sector", "Industry",
                 "Percentage Difference", "Price_Start", "Price_End"
             ]
             final_df = final_df.reindex(columns=column_order)
-            # ====================== END CLEAN SECTION ======================
+            # ====================== END FIXED SECTION ======================
             
             # --- Results Display ---
             col1, col2 = st.columns(2)
