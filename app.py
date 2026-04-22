@@ -126,20 +126,27 @@ if not tickers_df.empty:
             
             st.success(f"Verified {len(final_df)} symbols successfully.")
             
-            # ====================== STRONGER WIGGLE TIME (more patient) ======================
+            # ====================== ULTRA-PATIENT VERSION (fixes early alphabetical failures) ======================
             if enrich_metadata:
                 status_text = st.empty()
-                status_text.text("🌐 Fetching Sector & Industry (stronger anti-throttle wiggle time)...")
+                status_text.text("🌐 Warming up Yahoo + fetching Sector & Industry (very patient mode)...")
                 
                 @st.cache_data(ttl=7*86400, show_spinner=False)
                 def get_sector_industry(symbol_list):
                     info_dict = {}
-                    batch_size = 20   # smaller = much more reliable
+                    batch_size = 15   # smaller = much safer
+                    
+                    # === WARM-UP: Fetch one big ticker first to "wake up" Yahoo ===
+                    try:
+                        warm_up = yf.Ticker("AAPL").info
+                        time.sleep(random.uniform(3.0, 6.0))
+                    except:
+                        pass
                     
                     for i in range(0, len(symbol_list), batch_size):
                         batch = symbol_list[i:i + batch_size]
                         status_text.text(
-                            f"🌐 Fetching batch {i//batch_size + 1} of {len(symbol_list)//batch_size + 1} (with strong wiggle)..."
+                            f"🌐 Fetching batch {i//batch_size + 1} of {len(symbol_list)//batch_size + 1} (patient mode)..."
                         )
                         
                         try:
@@ -154,9 +161,9 @@ if not tickers_df.empty:
                                 except:
                                     info_dict[sym] = {"Sector": "N/A", "Industry": "N/A"}
                         except:
-                            # fallback one-by-one with extra patience
+                            # Heavy fallback with extra patience
                             for sym in batch:
-                                for attempt in range(4):   # more retries
+                                for attempt in range(5):   # more retries
                                     try:
                                         t = yf.Ticker(sym)
                                         info = t.info
@@ -166,14 +173,18 @@ if not tickers_df.empty:
                                         }
                                         break
                                     except:
-                                        time.sleep(random.uniform(1.5, 3.0))
+                                        time.sleep(random.uniform(2.0, 4.5))
                                 else:
                                     info_dict[sym] = {"Sector": "N/A", "Industry": "N/A"}
                         
-                        # ← STRONGER WIGGLE TIME (this is what you asked for)
-                        time.sleep(random.uniform(4.5, 9.0))   # generous random pause
+                        # Progressive wiggle — longer delays early on
+                        delay = random.uniform(6.0, 11.0) if i < 200 else random.uniform(4.0, 8.0)
+                        time.sleep(delay)
                     
                     return pd.DataFrame.from_dict(info_dict, orient="index")
+                
+                # Clear any stale N/A cache from previous runs
+                get_sector_industry.clear()
                 
                 symbols_to_enrich = final_df["Symbol"].tolist()
                 enrich_df = get_sector_industry(symbols_to_enrich)
@@ -184,26 +195,22 @@ if not tickers_df.empty:
                 final_df["Sector"] = "N/A"
                 final_df["Industry"] = "N/A"
             
-            # Safety guard (in case anything is still missing)
-            for col, default in {
-                "Sector": "N/A",
-                "Industry": "N/A"
-            }.items():
+            # Final safety guard
+            for col, default in {"Sector": "N/A", "Industry": "N/A"}.items():
                 if col not in final_df.columns:
                     final_df[col] = default
             
-            # Safe column reordering
             column_order = [
                 "Symbol", 
                 "Security Name", 
                 "Price_Start", 
                 "Price_End",
-                "Percentage Difference",
+                "Percentage Difference"
                 "Sector", 
                 "Industry"
             ]
             final_df = final_df.reindex(columns=column_order)
-            # ====================== END STRONGER WIGGLE SECTION ======================
+            # ====================== END ULTRA-PATIENT SECTION ======================
             # ====================== END NEW SECTION ======================
             
             # --- Results Display ---
